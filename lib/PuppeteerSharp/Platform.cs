@@ -16,9 +16,17 @@ namespace PuppeteerSharp
         /// </summary>
         MacOS,
         /// <summary>
+        /// MacOS ARM64.
+        /// </summary>
+        MacOSArm,
+        /// <summary>
         /// Linux.
         /// </summary>
         Linux,
+        /// <summary>
+        /// Linux ARM64.
+        /// </summary>
+        LinuxArm64,
         /// <summary>
         /// Win32.
         /// </summary>
@@ -26,6 +34,10 @@ namespace PuppeteerSharp
         /// <summary>
         /// Win64.
         /// </summary>
-        Win64
+        Win64,
+        /// <summary>
+        /// Win ARM64
+        /// </summary>
+        Win64Arm,
     }
 }

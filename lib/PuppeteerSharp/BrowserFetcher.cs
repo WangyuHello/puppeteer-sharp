@@ -43,6 +43,7 @@ namespace PuppeteerSharp
         {
             [(Product.Chrome, Platform.Linux)] = "{0}/chromium-browser-snapshots/Linux_x64/{1}/{2}.zip",
             [(Product.Chrome, Platform.MacOS)] = "{0}/chromium-browser-snapshots/Mac/{1}/{2}.zip",
+            [(Product.Chrome, Platform.MacOSArm)] = "{0}/chromium-browser-snapshots/Mac_Arm/{1}/{2}.zip",
             [(Product.Chrome, Platform.Win32)] = "{0}/chromium-browser-snapshots/Win/{1}/{2}.zip",
             [(Product.Chrome, Platform.Win64)] = "{0}/chromium-browser-snapshots/Win_x64/{1}/{2}.zip",
             [(Product.Firefox, Platform.Linux)] = "{0}/firefox-{1}.en-US.{2}-x86_64.tar.bz2",
@@ -532,17 +533,33 @@ namespace PuppeteerSharp
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                return Platform.MacOS;
+                return RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => Platform.MacOS,
+                    Architecture.Arm64 => Platform.MacOSArm,
+                    _ => Platform.Unknown,
+                };
             }
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                return Platform.Linux;
+                return RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => Platform.Linux,
+                    Architecture.Arm64 => Platform.LinuxArm64,
+                    _ => Platform.Unknown,
+                };
             }
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return RuntimeInformation.OSArchitecture == Architecture.X64 ? Platform.Win64 : Platform.Win32;
+                return RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => Platform.Win64,
+                    Architecture.X86 => Platform.Win32,
+                    Architecture.Arm64 => Platform.Win64Arm,
+                    _ => Platform.Unknown,
+                };
             }
 
             return Platform.Unknown;
@@ -603,6 +620,7 @@ namespace PuppeteerSharp
                     case Platform.Linux:
                         return "chrome-linux";
                     case Platform.MacOS:
+                    case Platform.MacOSArm:
                         return "chrome-mac";
                     case Platform.Win32:
                     case Platform.Win64:
@@ -629,8 +647,20 @@ namespace PuppeteerSharp
             }
         }
 
+        private static string GetDownloadURLInner(Product product, Platform platform)
+        {
+            if (_downloadUrls.ContainsKey((product, platform)))
+            {
+                return _downloadUrls[(product, platform)];
+            }
+            else
+            {
+                throw new ArgumentException("Invalid platform", nameof(platform));
+            }
+        }
+
         private static string GetDownloadURL(Product product, Platform platform, string host, string revision)
-            => string.Format(CultureInfo.CurrentCulture, _downloadUrls[(product, platform)], host, revision, GetArchiveName(product, platform, revision));
+            => string.Format(CultureInfo.CurrentCulture, GetDownloadURLInner(product, platform), host, revision, GetArchiveName(product, platform, revision));
 
         /// <summary>
         /// Disposes of any disposable members in <see cref="BrowserFetcher" />.
