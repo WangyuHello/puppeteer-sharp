@@ -9,8 +9,8 @@ namespace PuppeteerSharp
     /// </summary>
     /// <example>
     /// An example of using Dialog class:
-    ///<code>
-    ///<![CDATA[
+    /// <code>
+    /// <![CDATA[
     /// Page.Dialog += async (sender, e) =>
     /// {
     ///     await e.Dialog.Accept();
@@ -22,6 +22,21 @@ namespace PuppeteerSharp
     public class Dialog
     {
         private readonly CDPSession _client;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Dialog"/> class.
+        /// </summary>
+        /// <param name="client">Client.</param>
+        /// <param name="type">Type.</param>
+        /// <param name="message">Message.</param>
+        /// <param name="defaultValue">Default value.</param>
+        public Dialog(CDPSession client, DialogType type, string message, string defaultValue)
+        {
+            _client = client;
+            DialogType = type;
+            Message = message;
+            DefaultValue = defaultValue;
+        }
 
         /// <summary>
         /// Dialog's type, can be one of alert, beforeunload, confirm or prompt.
@@ -38,21 +53,6 @@ namespace PuppeteerSharp
         /// </summary>
         /// <value>The message.</value>
         public string Message { get; set; }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="Dialog"/> class.
-        /// </summary>
-        /// <param name="client">Client.</param>
-        /// <param name="type">Type.</param>
-        /// <param name="message">Message.</param>
-        /// <param name="defaultValue">Default value.</param>
-        public Dialog(CDPSession client, DialogType type, string message, string defaultValue)
-        {
-            _client = client;
-            DialogType = type;
-            Message = message;
-            DefaultValue = defaultValue;
-        }
 
         /// <summary>
         /// Accept the Dialog.

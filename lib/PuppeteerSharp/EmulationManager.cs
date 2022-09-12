@@ -16,26 +16,27 @@ namespace PuppeteerSharp
             _client = client;
         }
 
-        internal async Task<bool> EmulateViewport(ViewPortOptions viewport)
+        internal async Task<bool> EmulateViewportAsync(ViewPortOptions viewport)
         {
             var mobile = viewport.IsMobile;
             var width = viewport.Width;
             var height = viewport.Height;
             var deviceScaleFactor = viewport.DeviceScaleFactor;
-            var screenOrientation = viewport.IsLandscape ?
-                new ScreenOrientation
+            var screenOrientation = viewport.IsLandscape
+                ? new ScreenOrientation
                 {
                     Angle = 90,
                     Type = ScreenOrientationType.LandscapePrimary
-                } :
-                new ScreenOrientation
+                }
+                : new ScreenOrientation
                 {
                     Angle = 0,
                     Type = ScreenOrientationType.PortraitPrimary
                 };
             var hasTouch = viewport.HasTouch;
 
-            await Task.WhenAll(new Task[] {
+            await Task.WhenAll(new Task[]
+            {
                 _client.SendAsync("Emulation.setDeviceMetricsOverride", new EmulationSetDeviceMetricsOverrideRequest
                 {
                     Mobile = mobile,
@@ -47,7 +48,6 @@ namespace PuppeteerSharp
                 _client.SendAsync("Emulation.setTouchEmulationEnabled", new EmulationSetTouchEmulationEnabledRequest
                 {
                     Enabled = hasTouch,
-                    Configuration = viewport.IsMobile ? "mobile" : "desktop"
                 })
             }).ConfigureAwait(false);
 

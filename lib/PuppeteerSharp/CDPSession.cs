@@ -37,37 +37,16 @@ namespace PuppeteerSharp
     /// </summary>
     public class CDPSession
     {
+        private readonly ConcurrentDictionary<int, MessageTask> _callbacks;
+
         internal CDPSession(Connection connection, TargetType targetType, string sessionId)
         {
             Connection = connection;
             TargetType = targetType;
-            SessionId = sessionId;
+            Id = sessionId;
 
             _callbacks = new ConcurrentDictionary<int, MessageTask>();
         }
-
-        #region Private Members
-        private readonly ConcurrentDictionary<int, MessageTask> _callbacks;
-        #endregion
-
-        #region Properties
-        /// <summary>
-        /// Gets the target type.
-        /// </summary>
-        /// <value>The target type.</value>
-        public TargetType TargetType { get; }
-
-        /// <summary>
-        /// Gets the session identifier.
-        /// </summary>
-        /// <value>The session identifier.</value>
-        public string SessionId { get; }
-
-        /// <summary>
-        /// Gets the connection.
-        /// </summary>
-        /// <value>The connection.</value>
-        internal Connection Connection { get; private set; }
 
         /// <summary>
         /// Occurs when message received from Chromium.
@@ -80,6 +59,24 @@ namespace PuppeteerSharp
         public event EventHandler Disconnected;
 
         internal event EventHandler<SessionAttachedEventArgs> SessionAttached;
+
+        /// <summary>
+        /// Gets the target type.
+        /// </summary>
+        /// <value>The target type.</value>
+        public TargetType TargetType { get; }
+
+        /// <summary>
+        /// Gets the session identifier.
+        /// </summary>
+        /// <value>The session identifier.</value>
+        public string Id { get; }
+
+        /// <summary>
+        /// Gets the connection.
+        /// </summary>
+        /// <value>The connection.</value>
+        internal Connection Connection { get; private set; }
 
         /// <summary>
         /// Gets a value indicating whether this <see cref="CDPSession"/> is closed.
@@ -97,9 +94,6 @@ namespace PuppeteerSharp
         /// </summary>
         /// <value>The logger factory.</value>
         public ILoggerFactory LoggerFactory => Connection.LoggerFactory;
-        #endregion
-
-        #region Public Methods
 
         internal void Send(string method, object args = null)
             => _ = SendAsync(method, args, false);
@@ -152,7 +146,7 @@ namespace PuppeteerSharp
 
             try
             {
-                await Connection.RawSendASync(id, method, args, SessionId).ConfigureAwait(false);
+                await Connection.RawSendASync(id, method, args, Id).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -168,7 +162,7 @@ namespace PuppeteerSharp
         /// <summary>
         /// Detaches session from target. Once detached, session won't emit any events and can't be used to send messages.
         /// </summary>
-        /// <returns></returns>
+        /// <returns>Task</returns>
         /// <exception cref="T:PuppeteerSharp.PuppeteerException">If the <see cref="Connection"/> is closed.</exception>
         public Task DetachAsync()
         {
@@ -179,15 +173,11 @@ namespace PuppeteerSharp
 
             return Connection.SendAsync("Target.detachFromTarget", new TargetDetachFromTargetRequest
             {
-                SessionId = SessionId
+                SessionId = Id
             });
         }
 
         internal bool HasPendingCallbacks() => _callbacks.Count != 0;
-
-        #endregion
-
-        #region Private Methods
 
         internal void OnMessage(ConnectionResponse obj)
         {
@@ -232,7 +222,5 @@ namespace PuppeteerSharp
 
         internal void OnSessionAttached(CDPSession session)
             => SessionAttached?.Invoke(this, new SessionAttachedEventArgs { Session = session });
-
-        #endregion
     }
 }

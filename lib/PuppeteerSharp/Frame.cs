@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -39,40 +39,25 @@ namespace PuppeteerSharp
     /// </example>
     public class Frame
     {
-        private readonly CDPSession _client;
-        private readonly List<Frame> _childFrames = new List<Frame>();
+        private readonly List<Frame> _childFrames = new();
 
-        internal string Id { get; set; }
-
-        internal string LoaderId { get; set; }
-
-        internal List<string> LifecycleEvents { get; }
-
-        internal string NavigationURL { get; private set; }
-
-        internal DOMWorld MainWorld { get; }
-
-        internal DOMWorld SecondaryWorld { get; }
-
-        internal Frame(FrameManager frameManager, CDPSession client, Frame parentFrame, string frameId)
+        internal Frame(FrameManager frameManager, Frame parentFrame, string frameId, CDPSession client)
         {
             FrameManager = frameManager;
-            _client = client;
             ParentFrame = parentFrame;
             Id = frameId;
+            Client = client;
 
             LifecycleEvents = new List<string>();
-
-            MainWorld = new DOMWorld(FrameManager, this, FrameManager.TimeoutSettings);
-            SecondaryWorld = new DOMWorld(FrameManager, this, FrameManager.TimeoutSettings);
 
             if (parentFrame != null)
             {
                 ParentFrame.AddChildFrame(this);
             }
+
+            UpdateClient(client);
         }
 
-        #region Properties
         /// <summary>
         /// Gets the child frames of the this frame
         /// </summary>
@@ -96,7 +81,7 @@ namespace PuppeteerSharp
         /// <summary>
         /// Gets the frame's url
         /// </summary>
-        public string Url { get; private set; }
+        public string Url { get; private set; } = string.Empty;
 
         /// <summary>
         /// Gets a value indicating if the frame is detached or not
@@ -108,10 +93,28 @@ namespace PuppeteerSharp
         /// </summary>
         public Frame ParentFrame { get; private set; }
 
-        internal FrameManager FrameManager { get; }
-        #endregion
+        /// <summary>
+        /// `true` if the frame is an OOP frame, or `false` otherwise.
+        /// </summary>
+        public bool IsOopFrame => Client != FrameManager.Client;
 
-        #region Public Methods
+        internal FrameManager FrameManager { get; }
+
+        internal string Id { get; set; }
+
+        internal string LoaderId { get; set; }
+
+        internal List<string> LifecycleEvents { get; }
+
+        internal string NavigationURL { get; private set; }
+
+        internal DOMWorld MainWorld { get; private set; }
+
+        internal DOMWorld SecondaryWorld { get; private set; }
+
+        internal CDPSession Client { get; private set; }
+
+        internal bool HasStartedLoading { get; private set; }
 
         /// <summary>
         /// Navigates to an url
@@ -165,8 +168,8 @@ namespace PuppeteerSharp
         /// <example>
         /// <code>
         /// <![CDATA[
-        /// var navigationTask =frame.page.WaitForNavigationAsync();
-        /// await frame.ClickAsync("a.my-link");
+        /// var navigationTask = Page.WaitForNavigationAsync();
+        /// await Page.MainFrame.ClickAsync("a.my-link");
         /// await navigationTask;
         /// ]]>
         /// </code>
@@ -232,8 +235,9 @@ namespace PuppeteerSharp
         /// </summary>
         /// <example>
         /// <code>
-        /// var frame = page.MainFrame;
-        /// const handle = Page.MainFrame.EvaluateExpressionHandleAsync("1 + 2");
+        /// <![CDATA[
+        /// var handle = await Page.MainFrame.EvaluateExpressionHandleAsync("1 + 2");
+        /// ]]>
         /// </code>
         /// </example>
         /// <returns>Resolves to the return value of <paramref name="script"/></returns>
@@ -245,15 +249,19 @@ namespace PuppeteerSharp
         /// </summary>
         /// <example>
         /// <code>
-        /// var frame = page.MainFrame;
-        /// const handle = Page.MainFrame.EvaluateFunctionHandleAsync("() => Promise.resolve(self)");
+        /// <![CDATA[
+        /// var handle = await Page.MainFrame.EvaluateFunctionHandleAsync("() => Promise.resolve(self)");
         /// return handle; // Handle for the global object.
+        /// ]]>
         /// </code>
         /// <see cref="JSHandle"/> instances can be passed as arguments to the <see cref="ExecutionContext.EvaluateFunctionAsync(string, object[])"/>:
-        ///
-        /// const handle = await Page.MainFrame.EvaluateExpressionHandleAsync("document.body");
-        /// const resultHandle = await Page.MainFrame.EvaluateFunctionHandleAsync("body => body.innerHTML", handle);
+        /// <code>
+        /// <![CDATA[
+        /// var handle = await Page.MainFrame.EvaluateExpressionHandleAsync("document.body");
+        /// var resultHandle = await Page.MainFrame.EvaluateFunctionHandleAsync("body => body.innerHTML", handle);
         /// return await resultHandle.JsonValueAsync(); // prints body's innerHTML
+        /// ]]>
+        /// </code>
         /// </example>
         /// <returns>Resolves to the return value of <paramref name="function"/></returns>
         /// <param name="function">Function to be evaluated in the <see cref="ExecutionContext"/></param>
@@ -387,6 +395,14 @@ namespace PuppeteerSharp
         /// <returns>Returns an array of option values that have been successfully selected.</returns>
         /// <seealso cref="Page.SelectAsync(string, string[])"/>
         public Task<string[]> SelectAsync(string selector, params string[] values) => SecondaryWorld.SelectAsync(selector, values);
+
+        /// <summary>
+        /// A utility function to be used with <see cref="PuppeteerHandleExtensions.EvaluateFunctionAsync{T}(Task{JSHandle}, string, object[])"/>
+        /// </summary>
+        /// <param name="selector">A selector to query page for</param>
+        /// <returns>Task which resolves to a <see cref="JSHandle"/> of <c>document.querySelectorAll</c> result</returns>
+        public Task<JSHandle> QuerySelectorAllHandleAsync(string selector)
+            => MainWorld.QuerySelectorAllHandleAsync(selector);
 
         /// <summary>
         /// Queries frame for the selector. If there's no such element within the frame, the method will resolve to <c>null</c>.
@@ -544,8 +560,10 @@ namespace PuppeteerSharp
         /// </remarks>
         /// <example>
         /// <code>
+        /// <![CDATA[
         /// await frame.TypeAsync("#mytextarea", "Hello"); // Types instantly
         /// await frame.TypeAsync("#mytextarea", "World", new TypeOptions { Delay = 100 }); // Types slower, like a user
+        /// ]]>
         /// </code>
         /// </example>
         /// <returns>Task</returns>
@@ -567,6 +585,8 @@ namespace PuppeteerSharp
                 _childFrames.Remove(frame);
             }
         }
+
+        internal void OnLoadingStarted() => HasStartedLoading = true;
 
         internal void OnLoadingStopped()
         {
@@ -605,6 +625,20 @@ namespace PuppeteerSharp
             ParentFrame = null;
         }
 
-        #endregion
+        internal void UpdateClient(CDPSession client)
+        {
+            Client = client;
+            MainWorld = new DOMWorld(
+              Client,
+              FrameManager,
+              this,
+              FrameManager.TimeoutSettings);
+
+            SecondaryWorld = new DOMWorld(
+              Client,
+              FrameManager,
+              this,
+              FrameManager.TimeoutSettings);
+        }
     }
 }

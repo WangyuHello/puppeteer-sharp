@@ -42,6 +42,13 @@ namespace PuppeteerSharp
         /// </summary>
         private const int CloseTimeout = 5000;
 
+        private readonly ConcurrentDictionary<string, BrowserContext> _contexts;
+        private readonly ILogger<Browser> _logger;
+        private readonly Func<TargetInfo, bool> _targetFilterCallback;
+        private readonly CustomQueriesManager _customQueriesManager = new();
+
+        private Task _closeTask;
+
         internal Browser(
             Connection connection,
             string[] contextIds,
@@ -66,19 +73,6 @@ namespace PuppeteerSharp
             _logger = Connection.LoggerFactory.CreateLogger<Browser>();
             _targetFilterCallback = targetFilter ?? ((TargetInfo _) => true);
         }
-
-        #region Private members
-
-        internal IDictionary<string, Target> TargetsMap { get; }
-
-        private readonly ConcurrentDictionary<string, BrowserContext> _contexts;
-        private readonly ILogger<Browser> _logger;
-        private readonly Func<TargetInfo, bool> _targetFilterCallback;
-        private Task _closeTask;
-
-        #endregion
-
-        #region Properties
 
         /// <summary>
         /// Raised when the <see cref="Browser"/> gets closed.
@@ -151,14 +145,6 @@ namespace PuppeteerSharp
         /// <value>The default context.</value>
         public BrowserContext DefaultContext { get; }
 
-        internal TaskQueue ScreenshotTaskQueue { get; set; }
-
-        internal Connection Connection { get; }
-
-        internal ViewPortOptions DefaultViewport { get; }
-
-        internal LauncherBase Launcher { get; set; }
-
         /// <summary>
         /// Dafault wait time in milliseconds. Defaults to 30 seconds.
         /// </summary>
@@ -167,9 +153,23 @@ namespace PuppeteerSharp
         /// Indicates that the browser is connected.
         /// </summary>
         public bool IsConnected => !Connection.IsClosed;
-        #endregion
 
-        #region Public Methods
+        /// <summary>
+        /// A target associated with the browser.
+        /// </summary>
+        public Target Target => Targets().FirstOrDefault(t => t.Type == TargetType.Browser);
+
+        internal TaskQueue ScreenshotTaskQueue { get; set; }
+
+        internal Connection Connection { get; }
+
+        internal ViewPortOptions DefaultViewport { get; }
+
+        internal LauncherBase Launcher { get; set; }
+
+        internal IDictionary<string, Target> TargetsMap { get; }
+
+        internal CustomQueriesManager CustomQueriesManager => _customQueriesManager;
 
         /// <summary>
         /// Creates a new page
@@ -182,11 +182,6 @@ namespace PuppeteerSharp
         /// </summary>
         /// <returns>An Array of all active targets</returns>
         public Target[] Targets() => TargetsMap.Values.Where(target => target.IsInitialized).ToArray();
-
-        /// <summary>
-        /// A target associated with the browser.
-        /// </summary>
-        public Target Target => Targets().FirstOrDefault(t => t.Type == TargetType.Browser);
 
         /// <summary>
         /// Creates a new incognito browser context. This won't share cookies/cache with other browser contexts.
@@ -254,7 +249,7 @@ namespace PuppeteerSharp
         /// </summary>
         /// <returns>Task which resolves to the browser's original user agent</returns>
         /// <remarks>
-        /// Pages can override browser user agent with <see cref="Page.SetUserAgentAsync(string)"/>
+        /// Pages can override browser user agent with <see cref="Page.SetUserAgentAsync(string, UserAgentMetadata)"/>
         /// </remarks>
         public async Task<string> GetUserAgentAsync()
             => (await Connection.SendAsync<BrowserGetVersionResponse>("Browser.getVersion").ConfigureAwait(false)).UserAgent;
@@ -317,6 +312,41 @@ namespace PuppeteerSharp
             }
         }
 
+        /// <summary>
+        /// Registers a custom query handler.
+        /// After registration, the handler can be used everywhere where a selector is
+        /// expected by prepending the selection string with `name/`. The name is
+        /// only allowed to consist of lower- and upper case latin letters.
+        /// </summary>
+        /// <example>
+        /// Puppeteer.RegisterCustomQueryHandler("text", "{ … }");
+        /// var aHandle = await page.QuerySelectorAsync("text/…");
+        /// </example>
+        /// <param name="name">The name that the custom query handler will be registered under.</param>
+        /// <param name="queryHandler">The query handler to register</param>
+        public void RegisterCustomQueryHandler(string name, CustomQueryHandler queryHandler)
+            => CustomQueriesManager.RegisterCustomQueryHandler(name, queryHandler);
+
+        /// <summary>
+        /// Returns a list with the names of all registered custom query handlers.
+        /// </summary>
+        /// <returns>The list of query handlers</returns>
+        internal IEnumerable<string> GetCustomQueryHandlerNames()
+            => CustomQueriesManager.GetCustomQueryHandlerNames();
+
+        /// <summary>
+        /// Unregisters a custom query handler
+        /// </summary>
+        /// <param name="name">The name of the query handler to unregistered.</param>
+        internal void UnregisterCustomQueryHandler(string name)
+            => CustomQueriesManager.UnregisterCustomQueryHandler(name);
+
+        /// <summary>
+        /// Clears all registered handlers.
+        /// </summary>
+        internal void ClearCustomQueryHandlers()
+            => CustomQueriesManager.ClearCustomQueryHandlers();
+
         private async Task CloseCoreAsync()
         {
             try
@@ -365,10 +395,6 @@ namespace PuppeteerSharp
 
             Closed?.Invoke(this, new EventArgs());
         }
-
-        #endregion
-
-        #region Private Methods
 
         internal void ChangeTarget(Target target)
         {
@@ -534,9 +560,6 @@ namespace PuppeteerSharp
 
             return browser;
         }
-        #endregion
-
-        #region IDisposable
 
         /// <inheritdoc />
         public void Dispose()
@@ -555,17 +578,11 @@ namespace PuppeteerSharp
                 _ => ScreenshotTaskQueue.DisposeAsync(),
                 TaskScheduler.Default);
 
-        #endregion
-
-        #region IAsyncDisposable
-
         /// <summary>
         /// Closes <see cref="Connection"/> and any Chromium <see cref="Process"/> that was
         /// created by Puppeteer.
         /// </summary>
         /// <returns>ValueTask</returns>
         public ValueTask DisposeAsync() => new ValueTask(CloseAsync());
-
-        #endregion
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -16,24 +17,33 @@ namespace PuppeteerSharp
     /// Inherits from <see cref="JSHandle"/>. It represents an in-page DOM element.
     /// ElementHandles can be created by <see cref="PuppeteerSharp.Page.QuerySelectorAsync(string)"/> or <see cref="PuppeteerSharp.Page.QuerySelectorAllAsync(string)"/>.
     /// </summary>
+    [DebuggerDisplay("{DebuggerDisplay,nq}")]
     public class ElementHandle : JSHandle
     {
         private readonly FrameManager _frameManager;
         private readonly ILogger<ElementHandle> _logger;
+        private readonly Frame _frame;
 
         internal ElementHandle(
             ExecutionContext context,
             CDPSession client,
             RemoteObject remoteObject,
+            Frame frame,
             Page page,
             FrameManager frameManager) : base(context, client, remoteObject)
         {
             Page = page;
+            _frame = frame;
             _frameManager = frameManager;
             _logger = client.LoggerFactory.CreateLogger<ElementHandle>();
         }
 
+        private string DebuggerDisplay =>
+            string.IsNullOrEmpty(RemoteObject.ClassName) ? ToString() : $"{RemoteObject.ClassName}@{RemoteObject.Description}";
+
         internal Page Page { get; }
+
+        internal CustomQueriesManager CustomQueriesManager => Page.Browser.CustomQueriesManager;
 
         /// <summary>
         /// This method scrolls element into view if needed, and then uses <seealso cref="PuppeteerSharp.Page.ScreenshotDataAsync(ScreenshotOptions)"/> to take a screenshot of the element.
@@ -98,6 +108,33 @@ namespace PuppeteerSharp
         public Task<byte[]> ScreenshotDataAsync() => ScreenshotDataAsync(new ScreenshotOptions());
 
         /// <summary>
+        /// Waits for a selector to be added to the DOM
+        /// </summary>
+        /// <param name="selector">A selector of an element to wait for</param>
+        /// <param name="options">Optional waiting parameters</param>
+        /// <returns>A task that resolves when element specified by selector string is added to DOM.
+        /// Resolves to `null` if waiting for `hidden: true` and selector is not found in DOM.</returns>
+        public async Task<ElementHandle> WaitForSelectorAsync(string selector, WaitForSelectorOptions options = null)
+        {
+            var frame = ExecutionContext.Frame;
+            var secondaryContext = await frame.SecondaryWorld.GetExecutionContextAsync().ConfigureAwait(false);
+            var adoptedRoot = await secondaryContext.AdoptElementHandleAsync(this).ConfigureAwait(false);
+            options ??= new WaitForSelectorOptions();
+            options.Root = adoptedRoot;
+
+            var handle = await frame.SecondaryWorld.WaitForSelectorAsync(selector, options).ConfigureAwait(false);
+            await adoptedRoot.DisposeAsync().ConfigureAwait(false);
+            if (handle == null)
+            {
+                return null;
+            }
+            var mainExecutionContext = await frame.MainWorld.GetExecutionContextAsync().ConfigureAwait(false);
+            var result = await mainExecutionContext.AdoptElementHandleAsync(handle).ConfigureAwait(false);
+            await handle.DisposeAsync().ConfigureAwait(false);
+            return result;
+        }
+
+        /// <summary>
         /// This method scrolls element into view if needed, and then uses <seealso cref="PuppeteerSharp.Page.ScreenshotDataAsync(ScreenshotOptions)"/> to take a screenshot of the element.
         /// If the element is detached from DOM, the method throws an error.
         /// </summary>
@@ -146,11 +183,6 @@ namespace PuppeteerSharp
                 await Page.SetViewportAsync(newRawViewport.ToObject<ViewPortOptions>(true)).ConfigureAwait(false);
                 needsViewportReset = true;
             }
-            await ExecutionContext.EvaluateFunctionAsync(
-                @"function(element) {
-                    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant'});
-                }",
-                this).ConfigureAwait(false);
 
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
             boundingBox = await BoundingBoxAsync().ConfigureAwait(false);
@@ -167,11 +199,12 @@ namespace PuppeteerSharp
             {
                 throw new PuppeteerException("Node has 0 height.");
             }
-            var getLayoutMetricsResponse = await Client.SendAsync<GetLayoutMetricsResponse>("Page.getLayoutMetrics").ConfigureAwait(false);
+            var getLayoutMetricsResponse = await Client.SendAsync<PageGetLayoutMetricsResponse>("Page.getLayoutMetrics").ConfigureAwait(false);
 
             var clip = boundingBox;
-            clip.X += getLayoutMetricsResponse.LayoutViewport.PageX;
-            clip.Y += getLayoutMetricsResponse.LayoutViewport.PageY;
+            var metricsViewport = getLayoutMetricsResponse.CssVisualViewport ?? getLayoutMetricsResponse.LayoutViewport;
+            clip.X += metricsViewport.PageX;
+            clip.Y += metricsViewport.PageY;
 
             options.Clip = boundingBox.ToClip();
             var imageData = await Page.ScreenshotBase64Async(options).ConfigureAwait(false);
@@ -191,8 +224,8 @@ namespace PuppeteerSharp
         public async Task HoverAsync()
         {
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
-            await Page.Mouse.MoveAsync(x, y).ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
+            await Page.Mouse.MoveAsync(clickablePoint.X, clickablePoint.Y).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -204,8 +237,8 @@ namespace PuppeteerSharp
         public async Task ClickAsync(ClickOptions options = null)
         {
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
-            await Page.Mouse.ClickAsync(x, y, options).ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
+            await Page.Mouse.ClickAsync(clickablePoint.X, clickablePoint.Y, options).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -285,8 +318,8 @@ namespace PuppeteerSharp
         public async Task TapAsync()
         {
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
-            await Page.Touchscreen.TapAsync(x, y).ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
+            await Page.Touchscreen.TapAsync(clickablePoint.X, clickablePoint.Y).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -330,7 +363,7 @@ namespace PuppeteerSharp
         /// <remarks>
         /// If <c>key</c> is a single character and no modifier keys besides <c>Shift</c> are being held down, a <c>keypress</c>/<c>input</c> event will also be generated. The <see cref="DownOptions.Text"/> option can be specified to force an input event to be generated.
         /// </remarks>
-        /// <returns></returns>
+        /// <returns>Task which resolves when the key is successfully pressed</returns>
         public async Task PressAsync(string key, PressOptions options = null)
         {
             await FocusAsync().ConfigureAwait(false);
@@ -342,19 +375,10 @@ namespace PuppeteerSharp
         /// </summary>
         /// <param name="selector">A selector to query element for</param>
         /// <returns>Task which resolves to <see cref="ElementHandle"/> pointing to the frame element</returns>
-        public async Task<ElementHandle> QuerySelectorAsync(string selector)
+        public Task<ElementHandle> QuerySelectorAsync(string selector)
         {
-            var handle = await EvaluateFunctionHandleAsync(
-                "(element, selector) => element.querySelector(selector)",
-                selector).ConfigureAwait(false);
-
-            if (handle is ElementHandle element)
-            {
-                return element;
-            }
-
-            await handle.DisposeAsync().ConfigureAwait(false);
-            return null;
+            var (updatedSelector, queryHandler) = CustomQueriesManager.GetQueryHandlerAndSelector(selector);
+            return queryHandler.QueryOne(this, updatedSelector);
         }
 
         /// <summary>
@@ -362,16 +386,10 @@ namespace PuppeteerSharp
         /// </summary>
         /// <param name="selector">A selector to query element for</param>
         /// <returns>Task which resolves to ElementHandles pointing to the frame elements</returns>
-        public async Task<ElementHandle[]> QuerySelectorAllAsync(string selector)
+        public Task<ElementHandle[]> QuerySelectorAllAsync(string selector)
         {
-            var arrayHandle = await EvaluateFunctionHandleAsync(
-                "(element, selector) => element.querySelectorAll(selector)",
-                selector).ConfigureAwait(false);
-
-            var properties = await arrayHandle.GetPropertiesAsync().ConfigureAwait(false);
-            await arrayHandle.DisposeAsync().ConfigureAwait(false);
-
-            return properties.Values.OfType<ElementHandle>().ToArray();
+            var (updatedSelector, queryHandler) = CustomQueriesManager.GetQueryHandlerAndSelector(selector);
+            return queryHandler.QueryAll(this, updatedSelector);
         }
 
         /// <summary>
@@ -380,8 +398,10 @@ namespace PuppeteerSharp
         /// <param name="selector">A selector to query element for</param>
         /// <returns>Task which resolves to a <see cref="JSHandle"/> of <c>document.querySelectorAll</c> result</returns>
         public Task<JSHandle> QuerySelectorAllHandleAsync(string selector)
-            => ExecutionContext.EvaluateFunctionHandleAsync(
-                "(element, selector) => Array.from(element.querySelectorAll(selector))", this, selector);
+        {
+            var (updatedSelector, queryHandler) = CustomQueriesManager.GetQueryHandlerAndSelector(selector);
+            return queryHandler.QueryAllArray(this, updatedSelector);
+        }
 
         /// <summary>
         /// Evaluates the XPath expression relative to the elementHandle. If there's no such element, the method will resolve to <c>null</c>.
@@ -421,7 +441,7 @@ namespace PuppeteerSharp
             {
                 return null;
             }
-
+            var (offsetX, offsetY) = await GetOOPIFOffsetsAsync(_frame).ConfigureAwait(false);
             var quad = result.Model.Border;
 
             var x = new[] { quad[0], quad[2], quad[4], quad[6] }.Min();
@@ -429,7 +449,7 @@ namespace PuppeteerSharp
             var width = new[] { quad[0], quad[2], quad[4], quad[6] }.Max() - x;
             var height = new[] { quad[1], quad[3], quad[5], quad[7] }.Max() - y;
 
-            return new BoundingBox(x, y, width, height);
+            return new BoundingBox(x + offsetX, y + offsetY, width, height);
         }
 
         /// <summary>
@@ -439,22 +459,23 @@ namespace PuppeteerSharp
         public async Task<BoxModel> BoxModelAsync()
         {
             var result = await GetBoxModelAsync().ConfigureAwait(false);
+            var (offsetX, offsetY) = await GetOOPIFOffsetsAsync(_frame).ConfigureAwait(false);
 
             return result == null
                 ? null
                 : new BoxModel
                 {
-                    Content = FromProtocolQuad(result.Model.Content),
-                    Padding = FromProtocolQuad(result.Model.Padding),
-                    Border = FromProtocolQuad(result.Model.Border),
-                    Margin = FromProtocolQuad(result.Model.Margin),
+                    Content = ApplyOffsetsToQuad(FromProtocolQuad(result.Model.Content), offsetX, offsetY).ToArray(),
+                    Padding = ApplyOffsetsToQuad(FromProtocolQuad(result.Model.Padding), offsetX, offsetY).ToArray(),
+                    Border = ApplyOffsetsToQuad(FromProtocolQuad(result.Model.Border), offsetX, offsetY).ToArray(),
+                    Margin = ApplyOffsetsToQuad(FromProtocolQuad(result.Model.Margin), offsetX, offsetY).ToArray(),
                     Width = result.Model.Width,
                     Height = result.Model.Height
                 };
         }
 
         /// <summary>
-        ///Content frame for element handles referencing iframe nodes, or null otherwise.
+        /// Content frame for element handles referencing iframe nodes, or null otherwise.
         /// </summary>
         /// <returns>Resolves to the content frame</returns>
         public async Task<Frame> ContentFrameAsync()
@@ -535,7 +556,7 @@ namespace PuppeteerSharp
 
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
             var start = await ClickablePointAsync().ConfigureAwait(false);
-            return await Page.Mouse.DragAsync(start.x, start.y, x, y).ConfigureAwait(false);
+            return await Page.Mouse.DragAsync(start.X, start.Y, x, y).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -551,8 +572,8 @@ namespace PuppeteerSharp
             }
 
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
-            await Page.Mouse.DragEnterAsync(x, y, data).ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
+            await Page.Mouse.DragEnterAsync(clickablePoint.X, clickablePoint.Y, data).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -568,8 +589,8 @@ namespace PuppeteerSharp
             }
 
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
-            await Page.Mouse.DragOverAsync(x, y, data).ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
+            await Page.Mouse.DragOverAsync(clickablePoint.X, clickablePoint.Y, data).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -585,8 +606,8 @@ namespace PuppeteerSharp
             }
 
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
-            await Page.Mouse.DropAsync(x, y, data).ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
+            await Page.Mouse.DropAsync(clickablePoint.X, clickablePoint.Y, data).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -608,12 +629,18 @@ namespace PuppeteerSharp
             }
 
             await ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-            var (x, y) = await ClickablePointAsync().ConfigureAwait(false);
+            var clickablePoint = await ClickablePointAsync().ConfigureAwait(false);
             var targetPoint = await target.ClickablePointAsync().ConfigureAwait(false);
-            await Page.Mouse.DragAndDropAsync(x, y, targetPoint.x, targetPoint.y, delay).ConfigureAwait(false);
+            await Page.Mouse.DragAndDropAsync(clickablePoint.X, clickablePoint.Y, targetPoint.X, targetPoint.Y, delay).ConfigureAwait(false);
         }
 
-        private async Task<(decimal x, decimal y)> ClickablePointAsync()
+        /// <summary>
+        /// Returns the middle point within an element unless a specific offset is provided.
+        /// </summary>
+        /// <param name="offset">Optional offset</param>
+        /// <exception cref="PuppeteerException">When the node is not visible or not an HTMLElement</exception>
+        /// <returns>A <see cref="Task"/> that resolves to the clickable point</returns>
+        public async Task<BoxModelPoint> ClickablePointAsync(BoxModelPoint? offset = null)
         {
             GetContentQuadsResponse result = null;
 
@@ -621,7 +648,7 @@ namespace PuppeteerSharp
             {
                 ObjectId = RemoteObject.ObjectId
             });
-            var layoutTask = Client.SendAsync<PageGetLayoutMetricsResponse>("Page.getLayoutMetrics");
+            var layoutTask = Page.Client.SendAsync<PageGetLayoutMetricsResponse>("Page.getLayoutMetrics");
 
             try
             {
@@ -638,9 +665,12 @@ namespace PuppeteerSharp
                 throw new PuppeteerException("Node is either not visible or not an HTMLElement");
             }
 
+            var (offsetX, offsetY) = await GetOOPIFOffsetsAsync(_frame).ConfigureAwait(false);
+
             // Filter out quads that have too small area to click into.
             var quads = result.Quads
                 .Select(FromProtocolQuad)
+                .Select(quad => ApplyOffsetsToQuad(quad, offsetX, offsetY))
                 .Select(q => IntersectQuadWithViewport(q, layoutTask.Result))
                 .Where(q => ComputeQuadArea(q.ToArray()) > 1);
 
@@ -651,6 +681,33 @@ namespace PuppeteerSharp
 
             // Return the middle point of the first quad.
             var quad = quads.First();
+            if (offset != null)
+            {
+                // Return the point of the first quad identified by offset.
+                var minX = decimal.MaxValue;
+                var minY = decimal.MaxValue;
+                foreach (var point in quad)
+                {
+                    if (point.X < minX)
+                    {
+                        minX = point.X;
+                    }
+                    if (point.Y < minY)
+                    {
+                        minY = point.Y;
+                    }
+                }
+                if (
+                  minX != decimal.MaxValue &&
+                  minY != decimal.MaxValue)
+                {
+                    return new BoxModelPoint()
+                    {
+                        X = minX + offset.Value.X,
+                        Y = minY + offset.Value.Y
+                    };
+                }
+            }
             var x = 0m;
             var y = 0m;
 
@@ -660,19 +717,74 @@ namespace PuppeteerSharp
                 y += point.Y;
             }
 
-            return (
-                x: x / 4,
-                y: y / 4);
+            return new BoxModelPoint()
+            {
+                X = x / 4,
+                Y = y / 4
+            };
+        }
+
+        private IEnumerable<BoxModelPoint> ApplyOffsetsToQuad(BoxModelPoint[] quad, decimal offsetX, decimal offsetY)
+            => quad.Select((part) => new BoxModelPoint() { X = part.X + offsetX, Y = part.Y + offsetY });
+
+        private async Task<(decimal OffsetX, decimal OffsetY)> GetOOPIFOffsetsAsync(Frame frame)
+        {
+            decimal offsetX = 0;
+            decimal offsetY = 0;
+
+            while (frame.ParentFrame != null)
+            {
+                var parent = frame.ParentFrame;
+                if (!frame.IsOopFrame)
+                {
+                    frame = parent;
+                    continue;
+                }
+                var frameOwner = await parent.Client.SendAsync<DomGetFrameOwnerResponse>(
+                        "DOM.getFrameOwner",
+                        new DomGetFrameOwnerRequest
+                        {
+                            FrameId = frame.Id,
+                        }).ConfigureAwait(false);
+
+                var result = await parent.Client.SendAsync<DomGetBoxModelResponse>(
+                    "DOM.getBoxModel",
+                    new DomGetBoxModelRequest
+                    {
+                        BackendNodeId = frameOwner.BackendNodeId,
+                    }).ConfigureAwait(false);
+
+                if (result == null)
+                {
+                    break;
+                }
+
+                var contentBoxQuad = result.Model.Content;
+                var topLeftCorner = FromProtocolQuad(contentBoxQuad)[0];
+                offsetX += topLeftCorner.X;
+                offsetY += topLeftCorner.Y;
+                frame = parent;
+            }
+
+            return (offsetX, offsetY);
         }
 
         private IEnumerable<BoxModelPoint> IntersectQuadWithViewport(IEnumerable<BoxModelPoint> quad, PageGetLayoutMetricsResponse viewport)
-            => quad.Select(point => new BoxModelPoint
+        {
+            var size = viewport.CssVisualViewport ?? viewport.LayoutViewport;
+            return quad.Select(point => new BoxModelPoint
             {
-                X = Math.Min(Math.Max(point.X, 0), viewport.ContentSize.Width),
-                Y = Math.Min(Math.Max(point.Y, 0), viewport.ContentSize.Height),
+                X = Math.Min(Math.Max(point.X, 0), size.ClientWidth),
+                Y = Math.Min(Math.Max(point.Y, 0), size.ClientHeight),
             });
+        }
 
-        private async Task ScrollIntoViewIfNeededAsync()
+        /// <summary>
+        /// If the element is not already fully visible then scrolls the element's parent container such that the element on
+        /// which ScrollIntoViewIfNeededAsync() is called is visible to the user.
+        /// </summary>
+        /// <returns>A Task that resolves when the message was confirmed by the browser</returns>
+        public async Task ScrollIntoViewIfNeededAsync()
         {
             var errorMessage = await EvaluateFunctionAsync<string>(
                 @"async(element, pageJavascriptEnabled) => {
@@ -704,11 +816,11 @@ namespace PuppeteerSharp
             }
         }
 
-        private async Task<BoxModelResponse> GetBoxModelAsync()
+        private async Task<DomGetBoxModelResponse> GetBoxModelAsync()
         {
             try
             {
-                return await Client.SendAsync<BoxModelResponse>("DOM.getBoxModel", new DomGetBoxModelRequest
+                return await Client.SendAsync<DomGetBoxModelResponse>("DOM.getBoxModel", new DomGetBoxModelRequest
                 {
                     ObjectId = RemoteObject.ObjectId
                 }).ConfigureAwait(false);

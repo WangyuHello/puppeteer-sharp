@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using PuppeteerSharp.Helpers;
 
@@ -16,13 +15,13 @@ namespace PuppeteerSharp
     /// </summary>
     public class FirefoxLauncher : LauncherBase
     {
-        internal static readonly string[] DefaultArgs = {
+        internal static readonly string[] _defaultArgs =
+        {
           "--no-remote",
-          "--foreground"
         };
 
         /// <summary>
-        /// Creates a new <see cref="FirefoxLauncher"/> instance.
+        /// Initializes a new instance of the <see cref="FirefoxLauncher"/> class.
         /// </summary>
         /// <param name="executable">Full path of executable.</param>
         /// <param name="options">Options for launching Firefox.</param>
@@ -38,7 +37,7 @@ namespace PuppeteerSharp
         /// <inheritdoc />
         public override string ToString() => $"Firefox process; EndPoint={EndPoint}; State={CurrentState}";
 
-        private static (List<string> firefoxArgs, TempDirectory tempUserDataDirectory) PrepareFirefoxArgs(LaunchOptions options)
+        private static (List<string> FirefoxArgs, TempDirectory TempUserDataDirectory) PrepareFirefoxArgs(LaunchOptions options)
         {
             var firefoxArgs = new List<string>();
 
@@ -211,8 +210,11 @@ namespace PuppeteerSharp
                 // Make sure opening about:addons will not hit the network
                 ["extensions.webservice.discoverURL"] = $"http://{server}/dummy/discoveryURL",
 
-                // Force disable Fission until the Remote Agent is compatible
-                ["fission.autostart"] = false,
+                // Temporarily force disable BFCache in parent (https://bit.ly/bug-1732263)
+                ["fission.bfcacheInParent"] = false,
+
+                // Force all web content to use a single content process
+                ["fission.webContentIsolationStrategy"] = 0,
 
                 // Allow the application to have focus even it runs in the background
                 ["focusmanager.testmode"] = true,
@@ -308,7 +310,12 @@ namespace PuppeteerSharp
 
         internal static string[] GetDefaultArgs(LaunchOptions options)
         {
-            var firefoxArguments = new List<string>(DefaultArgs);
+            var firefoxArguments = new List<string>(_defaultArgs);
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                firefoxArguments.Add("--foreground");
+            }
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
